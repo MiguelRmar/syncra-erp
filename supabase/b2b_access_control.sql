@@ -113,6 +113,37 @@ END;
 $$;
 
 -- ============================================================================
+-- 4. SOPORTE MULTI-DOMINIO / MARCA BLANCA POR EMPRESA (NON-BREAKING)
+-- ============================================================================
+ALTER TABLE public.tenants
+ADD COLUMN IF NOT EXISTS custom_domain TEXT;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_tenants_custom_domain
+  ON public.tenants (lower(custom_domain))
+  WHERE custom_domain IS NOT NULL;
+
+-- RPC seguro (público de solo lectura) para resolver branding en /login según el dominio
+CREATE OR REPLACE FUNCTION public.get_tenant_branding_by_domain(p_domain TEXT)
+RETURNS TABLE (
+  id UUID,
+  name TEXT,
+  logo_url TEXT,
+  primary_color TEXT
+)
+LANGUAGE sql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+  SELECT t.id, t.name, t.logo_url, t.primary_color
+  FROM public.tenants t
+  WHERE lower(t.custom_domain) = lower(trim(p_domain))
+     OR lower(t.slug) = split_part(lower(trim(p_domain)), '.', 1)
+  LIMIT 1;
+$$;
+
+GRANT EXECUTE ON FUNCTION public.get_tenant_branding_by_domain(TEXT) TO anon, authenticated;
+
+-- ============================================================================
 -- 4. CONFIGURACIÓN INICIAL DE TU CUENTA (REEMPLAZA CON TU CORREO)
 -- ============================================================================
 -- Descomenta y ejecuta con tu correo para darte permisos de Super Admin:

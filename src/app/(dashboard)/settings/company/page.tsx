@@ -3,13 +3,14 @@
 import { useState, useEffect, useRef } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import { useRouter } from 'next/navigation';
-import { Building2, Palette, Upload, CheckCircle, AlertCircle, Loader2, Image as ImageIcon } from 'lucide-react';
+import { Building2, Palette, Upload, CheckCircle, AlertCircle, Loader2, Image as ImageIcon, Globe } from 'lucide-react';
 
 interface TenantData {
   id: string;
   name: string;
   logo_url: string | null;
   primary_color: string | null;
+  custom_domain?: string | null;
 }
 
 type Status = 'idle' | 'loading' | 'success' | 'error';
@@ -18,6 +19,7 @@ export default function CompanySettingsPage() {
   const [tenant, setTenant] = useState<TenantData | null>(null);
   const [name, setName] = useState('');
   const [color, setColor] = useState('#2563eb');
+  const [customDomain, setCustomDomain] = useState('');
   const [file, setFile] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [status, setStatus] = useState<Status>('loading');
@@ -44,7 +46,7 @@ export default function CompanySettingsPage() {
 
         const { data: tenantData, error } = await supabase
           .from('tenants')
-          .select('id, name, logo_url, primary_color')
+          .select('id, name, logo_url, primary_color, custom_domain')
           .eq('id', profile.tenant_id)
           .single();
 
@@ -54,6 +56,7 @@ export default function CompanySettingsPage() {
         setTenant(tenantData);
         setName(tenantData.name ?? '');
         setColor(tenantData.primary_color ?? '#2563eb');
+        setCustomDomain(tenantData.custom_domain ?? '');
         setPreviewUrl(tenantData.logo_url);
         setStatus('idle');
       } catch (err: any) {
@@ -93,6 +96,7 @@ export default function CompanySettingsPage() {
       }
       // Siempre guarda el color (primary_color puede ser null en BD)
       updates.primary_color = color;
+      updates.custom_domain = customDomain.trim().toLowerCase() || null;
 
       // Subir logo si hay archivo nuevo
       if (file) {
@@ -223,6 +227,24 @@ export default function CompanySettingsPage() {
             />
             <span className="font-mono text-xs text-neutral-400">{color}</span>
           </div>
+        </div>
+
+        {/* Dominio Personalizado (Opcional) */}
+        <div>
+          <label className="text-xs font-medium text-neutral-300 flex items-center gap-1.5">
+            <Globe className="h-3.5 w-3.5" />
+            Dominio Personalizado (Opcional - Marca Blanca)
+          </label>
+          <input
+            type="text"
+            placeholder="Ej: erp.miempresa.com"
+            value={customDomain}
+            onChange={(e) => setCustomDomain(e.target.value)}
+            className="mt-1.5 w-full rounded-lg border border-neutral-700 bg-neutral-800 px-3.5 py-2.5 text-sm text-white placeholder-neutral-500 outline-none focus:border-blue-500 transition font-mono"
+          />
+          <p className="text-[11px] text-neutral-500 mt-1">
+            Si vinculas un dominio propio en Vercel para esta empresa, escríbelo aquí para activar su marca en el login.
+          </p>
         </div>
 
         {/* Logo */}

@@ -5,11 +5,19 @@ import { createClient } from '@/lib/supabase/client';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { LogIn, Layers, ShieldAlert } from 'lucide-react';
 
+interface TenantBranding {
+  id: string;
+  name: string;
+  logo_url: string | null;
+  primary_color: string | null;
+}
+
 function LoginForm() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
+  const [branding, setBranding] = useState<TenantBranding | null>(null);
   const router = useRouter();
   const searchParams = useSearchParams();
   const supabase = createClient();
@@ -24,6 +32,23 @@ function LoginForm() {
       setErrorMsg('No se pudo completar la autenticación con el proveedor.');
     }
   }, [searchParams]);
+
+  useEffect(() => {
+    const resolveDomainBranding = async () => {
+      const host = window.location.hostname;
+      if (!host || host === 'localhost' || host === 'syncra-erp.vercel.app') return;
+
+      const { data } = await supabase.rpc('get_tenant_branding_by_domain', {
+        p_domain: host,
+      });
+
+      if (Array.isArray(data) && data.length > 0) {
+        setBranding(data[0]);
+      }
+    };
+
+    resolveDomainBranding();
+  }, [supabase]);
 
   const handleEmailLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -119,10 +144,27 @@ function LoginForm() {
     <div className="flex min-h-screen items-center justify-center bg-neutral-950 p-4 font-sans text-neutral-100">
       <div className="w-full max-w-md space-y-6 rounded-2xl border border-neutral-800 bg-neutral-900/60 p-8 backdrop-blur-xl shadow-2xl">
         <div className="text-center space-y-2">
-          <div className="inline-flex h-12 w-12 items-center justify-center rounded-xl bg-blue-600/10 text-blue-500 border border-blue-500/20 mb-2">
-            <Layers className="h-6 w-6" />
-          </div>
-          <h1 className="text-2xl font-bold tracking-tight text-white">Syncra ERP</h1>
+          {branding?.logo_url ? (
+            <img
+              src={branding.logo_url}
+              alt={branding.name}
+              className="mx-auto h-12 w-12 rounded-xl object-contain border border-neutral-800 bg-neutral-900 p-1 mb-2"
+            />
+          ) : (
+            <div
+              className="inline-flex h-12 w-12 items-center justify-center rounded-xl bg-blue-600/10 text-blue-500 border border-blue-500/20 mb-2"
+              style={
+                branding?.primary_color
+                  ? { color: branding.primary_color, borderColor: `${branding.primary_color}40` }
+                  : undefined
+              }
+            >
+              <Layers className="h-6 w-6" />
+            </div>
+          )}
+          <h1 className="text-2xl font-bold tracking-tight text-white">
+            {branding?.name || 'Syncra ERP'}
+          </h1>
           <p className="text-sm text-neutral-400">Acceso a módulo de inventario y producción</p>
         </div>
 
