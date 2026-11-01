@@ -1,31 +1,77 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect, Suspense } from 'react';
 import { createClient } from '@/lib/supabase/client';
-import { useRouter } from 'next/navigation';
-import { LogIn, Layers } from 'lucide-react';
+import { useRouter, useSearchParams } from 'next/navigation';
+import { LogIn, Layers, ShieldAlert } from 'lucide-react';
 
-export default function LoginPage() {
+function LoginForm() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
   const router = useRouter();
+  const searchParams = useSearchParams();
   const supabase = createClient();
+
+  useEffect(() => {
+    const errorParam = searchParams.get('error');
+    if (errorParam === 'unauthorized') {
+      setErrorMsg(
+        'Acceso restringido (Beta Privada): Tu correo no cuenta con una invitación activa ni licencia comercial en Syncra ERP.'
+      );
+    } else if (errorParam === 'oauth_error') {
+      setErrorMsg('No se pudo completar la autenticación con el proveedor.');
+    }
+  }, [searchParams]);
 
   const handleEmailLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
     setErrorMsg('');
 
-    const { error } = await supabase.auth.signInWithPassword({ email, password });
+    const { data, error } = await supabase.auth.signInWithPassword({ email, password });
     if (error) {
       setErrorMsg(error.message);
       setLoading(false);
-    } else {
-      router.push('/inventory');
-      router.refresh();
+      return;
     }
+
+    if (data.user) {
+      const userEmail = (data.user.email ?? '').toLowerCase();
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('tenant_id, is_super_admin')
+        .eq('id', data.user.id)
+        .single();
+
+      if (!profile?.tenant_id && !profile?.is_super_admin) {
+        const { data: authorizedOwner } = await supabase
+          .from('authorized_owners')
+          .select('email')
+          .eq('email', userEmail)
+          .maybeSingle();
+
+        const { data: invitation } = await supabase
+          .from('tenant_invitations')
+          .select('id, tenant_id, role')
+          .eq('email', userEmail)
+          .is('accepted_at', null)
+          .maybeSingle();
+
+        if (!authorizedOwner && !invitation) {
+          await supabase.auth.signOut();
+          setErrorMsg(
+            'Acceso restringido (Beta Privada): Tu correo no cuenta con una invitación activa ni licencia comercial en Syncra ERP.'
+          );
+          setLoading(false);
+          return;
+        }
+      }
+    }
+
+    router.push('/inventory');
+    router.refresh();
   };
 
   const handleGoogleLogin = async () => {
@@ -49,8 +95,9 @@ export default function LoginPage() {
         </div>
 
         {errorMsg && (
-          <div className="rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-xs text-red-400">
-            {errorMsg}
+          <div className="flex items-start gap-2 rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-xs text-red-400">
+            <ShieldAlert className="h-4 w-4 shrink-0 mt-0.5" />
+            <span>{errorMsg}</span>
           </div>
         )}
 
@@ -109,5 +156,13 @@ export default function LoginPage() {
         </button>
       </div>
     </div>
+  );
+}
+
+export default function LoginPage() {
+  return (
+    <Suspense fallback={<div className="min-h-screen bg-neutral-950" />}>
+      <LoginForm />
+    </Suspense>
   );
 }
