@@ -45,28 +45,60 @@ function LoginForm() {
         .eq('id', data.user.id)
         .single();
 
-      if (!profile?.tenant_id && !profile?.is_super_admin) {
+      if (!profile?.tenant_id) {
+        // 1. Si tiene invitación a una empresa existente, vincularlo de inmediato
+        const { data: invitation } = await supabase
+          .from('tenant_invitations')
+          .select('id, tenant_id, role')
+          .eq('email', userEmail)
+          .is('accepted_at', null)
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .maybeSingle();
+
+        if (invitation) {
+          await supabase
+            .from('profiles')
+            .update({ tenant_id: invitation.tenant_id, role: invitation.role })
+            .eq('id', data.user.id);
+
+          await supabase
+            .from('tenant_members')
+            .upsert(
+              { tenant_id: invitation.tenant_id, user_id: data.user.id, role: invitation.role },
+              { onConflict: 'tenant_id,user_id' }
+            );
+
+          await supabase
+            .from('tenant_invitations')
+            .update({ accepted_at: new Date().toISOString() })
+            .eq('id', invitation.id);
+
+          router.push('/inventory');
+          router.refresh();
+          return;
+        }
+
+        // 2. Si es un cliente nuevo autorizado para crear empresa -> enviarlo directo a /onboarding
         const { data: authorizedOwner } = await supabase
           .from('authorized_owners')
           .select('email')
           .eq('email', userEmail)
           .maybeSingle();
 
-        const { data: invitation } = await supabase
-          .from('tenant_invitations')
-          .select('id, tenant_id, role')
-          .eq('email', userEmail)
-          .is('accepted_at', null)
-          .maybeSingle();
-
-        if (!authorizedOwner && !invitation) {
-          await supabase.auth.signOut();
-          setErrorMsg(
-            'Acceso restringido (Beta Privada): Tu correo no cuenta con una invitación activa ni licencia comercial en Syncra ERP.'
-          );
-          setLoading(false);
+        if (profile?.is_super_admin || authorizedOwner) {
+          router.push('/onboarding');
+          router.refresh();
           return;
         }
+
+        // 3. Sin invitación ni licencia
+        await supabase.auth.signOut();
+        setErrorMsg(
+          'Acceso restringido (Beta Privada): Tu correo no cuenta con una invitación activa ni licencia comercial en Syncra ERP.'
+        );
+        setLoading(false);
+        return;
       }
     }
 

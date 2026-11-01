@@ -1,3 +1,4 @@
+import type { Metadata } from 'next';
 import { createClient } from '@/lib/supabase/server';
 import { redirect } from 'next/navigation';
 import HeaderBranding from '@/components/header-branding';
@@ -7,6 +8,34 @@ interface Tenant {
   name: string;
   logo_url: string | null;
   primary_color: string | null;
+}
+
+export async function generateMetadata(): Promise<Metadata> {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  if (!user) return { title: 'Syncra ERP' };
+
+  const { data: profile } = await supabase
+    .from('profiles')
+    .select('tenant_id')
+    .eq('id', user.id)
+    .single();
+
+  if (!profile?.tenant_id) return { title: 'Syncra ERP' };
+
+  const { data: tenant } = await supabase
+    .from('tenants')
+    .select('name, logo_url')
+    .eq('id', profile.tenant_id)
+    .single();
+
+  return {
+    title: tenant?.name ? `${tenant.name} | Syncra ERP` : 'Syncra ERP',
+    ...(tenant?.logo_url ? { icons: { icon: tenant.logo_url } } : {}),
+  };
 }
 
 export default async function DashboardLayout({

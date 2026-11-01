@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { createClient } from '@/lib/supabase/client';
-import { Mail, Shield, UserPlus } from 'lucide-react';
+import { Mail, Shield, Copy, Check, Send, Trash2, CheckCircle2, AlertCircle, Building2, Sparkles } from 'lucide-react';
 
 interface Invitation {
   id: string;
@@ -12,15 +12,31 @@ interface Invitation {
   created_at: string;
 }
 
+interface AuthorizedOwner {
+  email: string;
+  company_notes: string | null;
+  used_at: string | null;
+  created_at: string;
+}
+
 export default function TeamPage() {
   const [email, setEmail] = useState('');
   const [role, setRole] = useState('operator');
   const [invitations, setInvitations] = useState<Invitation[]>([]);
+  const [tenantName, setTenantName] = useState('Syncra ERP');
+  const [isSuperAdmin, setIsSuperAdmin] = useState(false);
+  const [authorizedOwners, setAuthorizedOwners] = useState<AuthorizedOwner[]>([]);
+  const [newOwnerEmail, setNewOwnerEmail] = useState('');
+  const [newOwnerNotes, setNewOwnerNotes] = useState('');
+  const [ownerLoading, setOwnerLoading] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [feedback, setFeedback] = useState<{ type: 'success' | 'info' | 'error'; text: string } | null>(null);
   const supabase = createClient();
 
   useEffect(() => {
     loadInvitations();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const loadInvitations = async () => {
@@ -29,18 +45,112 @@ export default function TeamPage() {
 
     const { data: profile } = await supabase
       .from('profiles')
-      .select('tenant_id')
+      .select('tenant_id, is_super_admin')
       .eq('id', user.id)
       .single();
 
-    if (profile?.tenant_id) {
-      const { data } = await supabase
-        .from('tenant_invitations')
+    if (profile?.is_super_admin) {
+      setIsSuperAdmin(true);
+      const { data: ownersData } = await supabase
+        .from('authorized_owners')
         .select('*')
-        .eq('tenant_id', profile.tenant_id)
         .order('created_at', { ascending: false });
+      if (ownersData) setAuthorizedOwners(ownersData);
+    }
 
-      if (data) setInvitations(data);
+    if (profile?.tenant_id) {
+      const [{ data: invData }, { data: tenantData }] = await Promise.all([
+        supabase
+          .from('tenant_invitations')
+          .select('*')
+          .eq('tenant_id', profile.tenant_id)
+          .order('created_at', { ascending: false }),
+        supabase
+          .from('tenants')
+          .select('name')
+          .eq('id', profile.tenant_id)
+          .single(),
+      ]);
+
+      if (invData) setInvitations(invData);
+      if (tenantData?.name) setTenantName(tenantData.name);
+    }
+  };
+
+  const getRoleLabel = (r: string) => (r === 'admin' ? 'Administrador' : 'Operario');
+
+  const buildInviteMessage = (targetEmail: string, targetRole: string) => {
+    const appUrl = typeof window !== 'undefined' ? `${window.location.origin}/login` : 'https://syncra-erp.vercel.app/login';
+    return `Hola, has sido autorizado para unirte a ${tenantName} en Syncra ERP con el rol de ${getRoleLabel(targetRole)}.\n\nIngresa aquí usando tu correo (${targetEmail}):\n${appUrl}`;
+  };
+
+  const handleCopyInvite = async (inv: Invitation) => {
+    const text = buildInviteMessage(inv.email, inv.role);
+    await navigator.clipboard.writeText(text);
+    setCopiedId(inv.id);
+    setTimeout(() => setCopiedId(null), 2000);
+  };
+
+  const handleMailto = (inv: Invitation) => {
+    const subject = encodeURIComponent(`Invitación a ${tenantName} en Syncra ERP`);
+    const body = encodeURIComponent(buildInviteMessage(inv.email, inv.role));
+    window.open(`mailto:${inv.email}?subject=${subject}&body=${body}`, '_blank');
+  };
+
+  const handleRevokeInvitation = async (id: string) => {
+    const { error } = await supabase.from('tenant_invitations').delete().eq('id', id);
+    if (!error) {
+      setInvitations((prev) => prev.filter((item) => item.id !== id));
+    }
+  };
+
+  const buildOwnerLicenseMessage = (targetEmail: string, notes: string | null) => {
+    const appUrl = typeof window !== 'undefined' ? `${window.location.origin}/login` : 'https://syncra-erp.vercel.app/login';
+    const companyRef = notes ? ` (${notes})` : '';
+    return `Hola, tu licencia comercial en Syncra ERP${companyRef} ha sido activada.\n\nIngresa aquí con tu correo (${targetEmail}) para registrar y configurar tu empresa:\n${appUrl}`;
+  };
+
+  const handleAuthorizeNewOwner = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newOwnerEmail.trim()) return;
+    setOwnerLoading(true);
+    setFeedback(null);
+
+    try {
+      const cleanEmail = newOwnerEmail.trim().toLowerCase();
+      const { data, error } = await supabase
+        .from('authorized_owners')
+        .upsert(
+          [{ email: cleanEmail, company_notes: newOwnerNotes.trim() || null, used_at: null }],
+          { onConflict: 'email' }
+        )
+        .select()
+        .single();
+
+      if (error) throw error;
+
+      setAuthorizedOwners((prev) => [
+        data,
+        ...prev.filter((o) => o.email !== cleanEmail),
+      ]);
+      setNewOwnerEmail('');
+      setNewOwnerNotes('');
+      setFeedback({
+        type: 'success',
+        text: `Licencia para nueva empresa habilitada para ${cleanEmail}. Cuando inicie sesión será dirigido a /onboarding para crear su propia empresa.`,
+      });
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Error al autorizar cliente';
+      setFeedback({ type: 'error', text: message });
+    } finally {
+      setOwnerLoading(false);
+    }
+  };
+
+  const handleRevokeOwner = async (targetEmail: string) => {
+    const { error } = await supabase.from('authorized_owners').delete().eq('email', targetEmail);
+    if (!error) {
+      setAuthorizedOwners((prev) => prev.filter((item) => item.email !== targetEmail));
     }
   };
 
@@ -48,41 +158,37 @@ export default function TeamPage() {
     e.preventDefault();
     if (!email.trim()) return;
     setLoading(true);
+    setFeedback(null);
 
     try {
-      const { data: { user }, error: userError } = await supabase.auth.getUser();
-      if (userError || !user) throw new Error('Usuario no autenticado');
+      const response = await fetch('/api/invite', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: email.trim().toLowerCase(), role }),
+      });
 
-      const { data: profile, error: profileError } = await supabase
-        .from('profiles')
-        .select('tenant_id')
-        .eq('id', user.id)
-        .single();
-
-      if (profileError || !profile?.tenant_id) {
-        throw new Error('No se encontró una empresa asociada a tu usuario');
+      const result = await response.json();
+      if (!response.ok) {
+        throw new Error(result.error || 'Error al crear la invitación');
       }
 
-      const { data, error } = await supabase
-        .from('tenant_invitations')
-        .insert([
-          {
-            tenant_id: profile.tenant_id,
-            email: email.trim().toLowerCase(),
-            role,
-            invited_by: user.id,
-          },
-        ])
-        .select()
-        .single();
-
-      if (error) throw error;
-
-      alert(`Invitación creada para ${email}. Al iniciar sesión con Google o correo quedará vinculado automáticamente.`);
+      setInvitations((prev) => [result.invitation, ...prev]);
       setEmail('');
-      setInvitations((prev) => [data, ...prev]);
-    } catch (err: any) {
-      alert(`Error: ${err.message}`);
+
+      if (result.emailSent) {
+        setFeedback({
+          type: 'success',
+          text: `Acceso habilitado y correo de invitación enviado automáticamente a ${result.invitation.email}.`,
+        });
+      } else {
+        setFeedback({
+          type: 'info',
+          text: `Acceso habilitado para ${result.invitation.email}. Puedes copiar el mensaje de invitación o enviarlo con un clic desde la lista inferior.`,
+        });
+      }
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Error inesperado';
+      setFeedback({ type: 'error', text: message });
     } finally {
       setLoading(false);
     }
@@ -96,6 +202,25 @@ export default function TeamPage() {
           Invita a tus colaboradores por correo. Al registrarse o iniciar sesión con Google entrarán directo a esta empresa.
         </p>
       </div>
+
+      {feedback && (
+        <div
+          className={`flex items-start gap-2.5 rounded-xl border p-3.5 text-xs ${
+            feedback.type === 'error'
+              ? 'border-red-500/30 bg-red-500/10 text-red-400'
+              : feedback.type === 'success'
+              ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-400'
+              : 'border-blue-500/30 bg-blue-500/10 text-blue-300'
+          }`}
+        >
+          {feedback.type === 'error' ? (
+            <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" />
+          ) : (
+            <CheckCircle2 className="h-4 w-4 shrink-0 mt-0.5" />
+          )}
+          <span>{feedback.text}</span>
+        </div>
+      )}
 
       <form onSubmit={handleSendInvitation} className="rounded-xl border border-neutral-800 bg-neutral-900/50 p-4 sm:p-6 space-y-4">
         <div className="flex flex-col sm:flex-row gap-3">
@@ -149,20 +274,62 @@ export default function TeamPage() {
             <p className="p-6 text-center text-xs text-neutral-500">No hay invitaciones registradas.</p>
           ) : (
             invitations.map((inv) => (
-              <div key={inv.id} className="p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <div key={inv.id} className="p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                 <div>
                   <p className="text-sm font-medium text-white">{inv.email}</p>
-                  <p className="text-xs text-neutral-400">Rol: <span className="text-neutral-200 capitalize">{inv.role}</span></p>
+                  <p className="text-xs text-neutral-400">
+                    Rol: <span className="text-neutral-200">{getRoleLabel(inv.role)}</span>
+                  </p>
                 </div>
-                <div>
+                <div className="flex flex-wrap items-center gap-2">
                   {inv.accepted_at ? (
-                    <span className="inline-flex text-[11px] font-medium px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                    <span className="inline-flex text-[11px] font-medium px-2.5 py-1 rounded-md bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
                       Aceptada / Vinculado
                     </span>
                   ) : (
-                    <span className="inline-flex text-[11px] font-medium px-2 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/20">
-                      Pendiente de ingreso
-                    </span>
+                    <>
+                      <span className="inline-flex text-[11px] font-medium px-2.5 py-1 rounded-md bg-amber-500/10 text-amber-400 border border-amber-500/20">
+                        Pendiente de ingreso
+                      </span>
+
+                      <button
+                        type="button"
+                        onClick={() => handleCopyInvite(inv)}
+                        className="inline-flex items-center gap-1.5 rounded-md border border-neutral-700 bg-neutral-800/80 px-2.5 py-1 text-[11px] font-medium text-neutral-200 hover:bg-neutral-700 transition"
+                        title="Copiar mensaje con link para WhatsApp o Slack"
+                      >
+                        {copiedId === inv.id ? (
+                          <>
+                            <Check className="h-3.5 w-3.5 text-emerald-400" />
+                            Copiado
+                          </>
+                        ) : (
+                          <>
+                            <Copy className="h-3.5 w-3.5 text-neutral-400" />
+                            Copiar Invitación
+                          </>
+                        )}
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => handleMailto(inv)}
+                        className="inline-flex items-center gap-1.5 rounded-md border border-neutral-700 bg-neutral-800/80 px-2.5 py-1 text-[11px] font-medium text-neutral-200 hover:bg-neutral-700 transition"
+                        title="Abrir cliente de correo con invitación redactada"
+                      >
+                        <Send className="h-3.5 w-3.5 text-neutral-400" />
+                        Enviar Correo
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => handleRevokeInvitation(inv.id)}
+                        className="inline-flex items-center justify-center rounded-md border border-red-500/20 bg-red-500/10 p-1 text-red-400 hover:bg-red-500/20 transition"
+                        title="Revocar invitación"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    </>
                   )}
                 </div>
               </div>
@@ -170,6 +337,149 @@ export default function TeamPage() {
           )}
         </div>
       </div>
+
+      {/* Panel exclusivo Super Admin: Autorizar Nuevas Empresas (Clientes B2B) */}
+      {isSuperAdmin && (
+        <div className="pt-6 border-t border-neutral-800 space-y-4">
+          <div className="flex items-center gap-2">
+            <span className="inline-flex items-center gap-1 rounded-md bg-amber-500/10 border border-amber-500/30 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-amber-400">
+              <Sparkles className="h-3 w-3" />
+              Super Admin B2B
+            </span>
+            <h2 className="text-lg font-bold text-white">Licencias para Nuevas Empresas</h2>
+          </div>
+          <p className="text-xs text-neutral-400">
+            Autoriza aquí el correo de un nuevo cliente que haya adquirido Syncra ERP. Al iniciar sesión con su correo, el sistema le permitirá crear su propia empresa desde cero en <code>/onboarding</code>.
+          </p>
+
+          <form
+            onSubmit={handleAuthorizeNewOwner}
+            className="rounded-xl border border-amber-500/20 bg-neutral-900/60 p-4 sm:p-6 space-y-4"
+          >
+            <div className="flex flex-col sm:flex-row gap-3">
+              <div className="flex-1">
+                <label className="text-xs font-medium text-neutral-300">Correo del Dueño / Cliente</label>
+                <div className="relative mt-1">
+                  <Mail className="absolute left-3 top-2.5 h-4 w-4 text-neutral-500" />
+                  <input
+                    type="email"
+                    required
+                    placeholder="gerente@nuevaempresa.com"
+                    value={newOwnerEmail}
+                    onChange={(e) => setNewOwnerEmail(e.target.value)}
+                    className="w-full rounded-lg border border-neutral-700 bg-neutral-800 pl-9 pr-3 py-2 text-sm text-white placeholder-neutral-500 outline-none focus:border-amber-500 transition"
+                  />
+                </div>
+              </div>
+
+              <div className="flex-1">
+                <label className="text-xs font-medium text-neutral-300">Nombre de Empresa / Referencia Comercial</label>
+                <div className="relative mt-1">
+                  <Building2 className="absolute left-3 top-2.5 h-4 w-4 text-neutral-500" />
+                  <input
+                    type="text"
+                    placeholder="Ej: Industrias Beta S.A.S."
+                    value={newOwnerNotes}
+                    onChange={(e) => setNewOwnerNotes(e.target.value)}
+                    className="w-full rounded-lg border border-neutral-700 bg-neutral-800 pl-9 pr-3 py-2 text-sm text-white placeholder-neutral-500 outline-none focus:border-amber-500 transition"
+                  />
+                </div>
+              </div>
+            </div>
+
+            <button
+              type="submit"
+              disabled={ownerLoading}
+              className="w-full sm:w-auto px-5 py-2.5 rounded-lg text-xs font-bold bg-amber-600 text-white hover:bg-amber-500 transition disabled:opacity-50"
+            >
+              {ownerLoading ? 'Habilitando licencia...' : '+ Autorizar Creación de Nueva Empresa'}
+            </button>
+          </form>
+
+          <div className="rounded-xl border border-neutral-800 bg-neutral-900/40 overflow-hidden">
+            <div className="p-4 border-b border-neutral-800">
+              <h3 className="text-sm font-semibold text-white">Clientes Autorizados (Owners)</h3>
+            </div>
+            <div className="divide-y divide-neutral-800/60">
+              {authorizedOwners.length === 0 ? (
+                <p className="p-6 text-center text-xs text-neutral-500">No hay licencias registradas.</p>
+              ) : (
+                authorizedOwners.map((owner) => (
+                  <div key={owner.email} className="p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                    <div>
+                      <p className="text-sm font-medium text-white">{owner.email}</p>
+                      {owner.company_notes && (
+                        <p className="text-xs text-neutral-400">Ref: {owner.company_notes}</p>
+                      )}
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      {owner.used_at ? (
+                        <span className="inline-flex text-[11px] font-medium px-2.5 py-1 rounded-md bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                          Empresa Creada
+                        </span>
+                      ) : (
+                        <>
+                          <span className="inline-flex text-[11px] font-medium px-2.5 py-1 rounded-md bg-amber-500/10 text-amber-400 border border-amber-500/20">
+                            Licencia Lista para Usar
+                          </span>
+
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              await navigator.clipboard.writeText(
+                                buildOwnerLicenseMessage(owner.email, owner.company_notes)
+                              );
+                              setCopiedId(owner.email);
+                              setTimeout(() => setCopiedId(null), 2000);
+                            }}
+                            className="inline-flex items-center gap-1.5 rounded-md border border-neutral-700 bg-neutral-800/80 px-2.5 py-1 text-[11px] font-medium text-neutral-200 hover:bg-neutral-700 transition"
+                          >
+                            {copiedId === owner.email ? (
+                              <>
+                                <Check className="h-3.5 w-3.5 text-emerald-400" />
+                                Copiado
+                              </>
+                            ) : (
+                              <>
+                                <Copy className="h-3.5 w-3.5 text-neutral-400" />
+                                Copiar Bienvenida
+                              </>
+                            )}
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const subject = encodeURIComponent('Bienvenido a Syncra ERP - Configura tu Empresa');
+                              const body = encodeURIComponent(
+                                buildOwnerLicenseMessage(owner.email, owner.company_notes)
+                              );
+                              window.open(`mailto:${owner.email}?subject=${subject}&body=${body}`, '_blank');
+                            }}
+                            className="inline-flex items-center gap-1.5 rounded-md border border-neutral-700 bg-neutral-800/80 px-2.5 py-1 text-[11px] font-medium text-neutral-200 hover:bg-neutral-700 transition"
+                          >
+                            <Send className="h-3.5 w-3.5 text-neutral-400" />
+                            Enviar Correo
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => handleRevokeOwner(owner.email)}
+                            className="inline-flex items-center justify-center rounded-md border border-red-500/20 bg-red-500/10 p-1 text-red-400 hover:bg-red-500/20 transition"
+                            title="Revocar licencia"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

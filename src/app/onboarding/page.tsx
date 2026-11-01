@@ -33,7 +33,7 @@ export default function OnboardingPage() {
 
       const { data: authorizedOwner } = await supabase
         .from('authorized_owners')
-        .select('email')
+        .select('email, company_notes')
         .eq('email', userEmail)
         .maybeSingle();
 
@@ -41,6 +41,10 @@ export default function OnboardingPage() {
         await supabase.auth.signOut();
         router.replace('/login?error=unauthorized');
         return;
+      }
+
+      if (authorizedOwner?.company_notes) {
+        setName(authorizedOwner.company_notes);
       }
 
       setVerifyingAccess(false);

@@ -17,13 +17,37 @@ CREATE TABLE IF NOT EXISTS public.authorized_owners (
 
 ALTER TABLE public.authorized_owners ENABLE ROW LEVEL SECURITY;
 
--- Política: un usuario autenticado solo puede consultar si su propio email está en la lista
+-- Política: un usuario autenticado puede consultar su propia licencia, y el Super Admin puede gestionar todas
 DROP POLICY IF EXISTS "Users can check their own authorization" ON public.authorized_owners;
 CREATE POLICY "Users can check their own authorization"
   ON public.authorized_owners
   FOR SELECT
   TO authenticated
-  USING (lower(email) = lower(auth.jwt() ->> 'email'));
+  USING (
+    lower(email) = lower(auth.jwt() ->> 'email')
+    OR EXISTS (
+      SELECT 1 FROM public.profiles
+      WHERE id = auth.uid() AND is_super_admin = true
+    )
+  );
+
+DROP POLICY IF EXISTS "Super admins can manage authorized owners" ON public.authorized_owners;
+CREATE POLICY "Super admins can manage authorized owners"
+  ON public.authorized_owners
+  FOR ALL
+  TO authenticated
+  USING (
+    EXISTS (
+      SELECT 1 FROM public.profiles
+      WHERE id = auth.uid() AND is_super_admin = true
+    )
+  )
+  WITH CHECK (
+    EXISTS (
+      SELECT 1 FROM public.profiles
+      WHERE id = auth.uid() AND is_super_admin = true
+    )
+  );
 
 -- 3. Blindar el RPC create_tenant_and_assign_user con validación B2B estricta
 CREATE OR REPLACE FUNCTION public.create_tenant_and_assign_user(
