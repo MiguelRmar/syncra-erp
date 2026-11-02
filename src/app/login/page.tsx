@@ -30,6 +30,10 @@ function LoginForm() {
       setErrorMsg(
         'Acceso restringido (Beta Privada): Tu correo no cuenta con una invitación activa ni licencia comercial en Syncra ERP.'
       );
+    } else if (errorParam === 'wrong_tenant_domain') {
+      setErrorMsg(
+        'Acceso denegado: Tu cuenta no pertenece a la empresa propietaria de esta URL.'
+      );
     } else if (errorParam === 'oauth_error') {
       setErrorMsg(
         reasonParam
@@ -189,6 +193,26 @@ function LoginForm() {
         );
         setLoading(false);
         return;
+      }
+      // Si está entrando por la URL exclusiva de una empresa ya creada, verificar que pertenezca a ella
+      if (branding?.id && profile?.tenant_id && !profile?.is_super_admin) {
+        if (profile.tenant_id !== branding.id) {
+          const { data: membership } = await supabase
+            .from('tenant_members')
+            .select('tenant_id')
+            .eq('user_id', data.user.id)
+            .eq('tenant_id', branding.id)
+            .maybeSingle();
+
+          if (!membership) {
+            await supabase.auth.signOut();
+            setErrorMsg(
+              `Acceso denegado: Tu cuenta no pertenece a ${branding.name}. Ingresa desde la URL de tu propia empresa.`
+            );
+            setLoading(false);
+            return;
+          }
+        }
       }
     }
 

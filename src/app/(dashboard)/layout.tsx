@@ -1,4 +1,5 @@
 import type { Metadata } from 'next';
+import { headers } from 'next/headers';
 import { createClient } from '@/lib/supabase/server';
 import { redirect } from 'next/navigation';
 import HeaderBranding from '@/components/header-branding';
@@ -77,7 +78,52 @@ export default async function DashboardLayout({
   }
 
   // Necesario para que TypeScript entienda que profile no es null después del redirect
-  const tenantId = profile!.tenant_id as string;
+  let tenantId = profile!.tenant_id as string;
+
+  // Validación estricta de Dominio por Empresa (Tenant-Domain Isolation)
+  const headersList = await headers();
+  const rawHost = (headersList.get('host') ?? '').split(':')[0].toLowerCase();
+  const isGenericHost =
+    !rawHost ||
+    rawHost === 'localhost' ||
+    rawHost === 'syncra-erp.vercel.app' ||
+    rawHost.endsWith('-miguelrmar.vercel.app');
+
+  if (!isGenericHost) {
+    const { data: domainBranding } = await supabase.rpc('get_tenant_branding_by_domain', {
+      p_domain: rawHost,
+    });
+
+    const domainTenant = Array.isArray(domainBranding) ? domainBranding[0] : null;
+
+    if (domainTenant?.id) {
+      if (!profile?.is_super_admin) {
+        const { data: membership } = await supabase
+          .from('tenant_members')
+          .select('tenant_id')
+          .eq('user_id', user.id)
+          .eq('tenant_id', domainTenant.id)
+          .maybeSingle();
+
+        const belongsToDomainTenant =
+          Boolean(membership) || profile?.tenant_id === domainTenant.id;
+
+        if (!belongsToDomainTenant) {
+          await supabase.auth.signOut();
+          redirect('/login?error=wrong_tenant_domain');
+        }
+      }
+
+      // Si el usuario pertenece a la empresa de este dominio (o es Super Admin), sincronizar su tenant activo
+      if (tenantId !== domainTenant.id) {
+        await supabase
+          .from('profiles')
+          .update({ tenant_id: domainTenant.id })
+          .eq('id', user.id);
+        tenantId = domainTenant.id;
+      }
+    }
+  }
 
   // Consulta directa a la empresa activa
   const { data: tenant } = await supabase
