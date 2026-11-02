@@ -3,7 +3,7 @@
 import { useState, useEffect, Suspense } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { LogIn, Layers, ShieldAlert } from 'lucide-react';
+import { LogIn, Layers, ShieldAlert, UserCheck } from 'lucide-react';
 
 interface TenantBranding {
   id: string;
@@ -13,6 +13,7 @@ interface TenantBranding {
 }
 
 function LoginForm() {
+  const [authMode, setAuthMode] = useState<'login' | 'activate'>('login');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
@@ -24,12 +25,17 @@ function LoginForm() {
 
   useEffect(() => {
     const errorParam = searchParams.get('error');
+    const reasonParam = searchParams.get('reason');
     if (errorParam === 'unauthorized') {
       setErrorMsg(
         'Acceso restringido (Beta Privada): Tu correo no cuenta con una invitación activa ni licencia comercial en Syncra ERP.'
       );
     } else if (errorParam === 'oauth_error') {
-      setErrorMsg('No se pudo completar la autenticación con el proveedor.');
+      setErrorMsg(
+        reasonParam
+          ? `No se pudo completar la autenticación: ${reasonParam}`
+          : 'No se pudo completar la autenticación con el proveedor. Si abriste el enlace desde Gmail, ábrelo directamente en tu navegador (Safari o Chrome).'
+      );
     }
   }, [searchParams]);
 
@@ -55,9 +61,68 @@ function LoginForm() {
     setLoading(true);
     setErrorMsg('');
 
-    const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+    const cleanEmail = email.trim().toLowerCase();
+
+    if (authMode === 'activate') {
+      // 1. Verificar en BD si el correo cuenta con invitación o licencia B2B antes de crear contraseña
+      const { data: isEligible, error: checkError } = await supabase.rpc(
+        'check_email_b2b_eligibility',
+        { p_email: cleanEmail }
+      );
+
+      if (checkError || !isEligible) {
+        setErrorMsg(
+          'Acceso restringido (Beta Privada): Este correo no tiene una invitación pendiente ni licencia comercial activa para crear cuenta.'
+        );
+        setLoading(false);
+        return;
+      }
+
+      const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
+        email: cleanEmail,
+        password,
+      });
+
+      if (signUpError) {
+        setErrorMsg(
+          signUpError.message.includes('already registered')
+            ? 'Este correo ya tiene una contraseña registrada. Cambia a la pestaña "Iniciar Sesión".'
+            : signUpError.message
+        );
+        setLoading(false);
+        return;
+      }
+
+      if (signUpData.user) {
+        // Verificar si quedó vinculado por invitación o si es dueño nuevo -> /onboarding
+        const { data: authorizedOwner } = await supabase
+          .from('authorized_owners')
+          .select('email, used_at')
+          .eq('email', cleanEmail)
+          .maybeSingle();
+
+        if (authorizedOwner && !authorizedOwner.used_at) {
+          router.push('/onboarding');
+          router.refresh();
+          return;
+        }
+
+        router.push('/inventory');
+        router.refresh();
+        return;
+      }
+    }
+
+    const { data, error } = await supabase.auth.signInWithPassword({
+      email: cleanEmail,
+      password,
+    });
     if (error) {
-      setErrorMsg(error.message);
+      setErrorMsg(
+        error.message.includes('Invalid login credentials')
+          ? 'Credenciales inválidas. Si es tu primera vez entrando con invitación, usa la pestaña "Activar Invitación" para crear tu contraseña.'
+          : error.message
+      );
       setLoading(false);
       return;
     }
@@ -175,9 +240,41 @@ function LoginForm() {
           </div>
         )}
 
+        {/* Selector: Iniciar Sesión vs Activar Invitación (Primer Ingreso con Contraseña) */}
+        <div className="grid grid-cols-2 gap-1 rounded-xl bg-neutral-950 p-1 border border-neutral-800">
+          <button
+            type="button"
+            onClick={() => {
+              setAuthMode('login');
+              setErrorMsg('');
+            }}
+            className={`rounded-lg py-2 text-xs font-semibold transition ${
+              authMode === 'login'
+                ? 'bg-neutral-800 text-white shadow'
+                : 'text-neutral-400 hover:text-neutral-200'
+            }`}
+          >
+            Iniciar Sesión
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setAuthMode('activate');
+              setErrorMsg('');
+            }}
+            className={`rounded-lg py-2 text-xs font-semibold transition ${
+              authMode === 'activate'
+                ? 'bg-neutral-800 text-white shadow'
+                : 'text-neutral-400 hover:text-neutral-200'
+            }`}
+          >
+            Activar Invitación
+          </button>
+        </div>
+
         <form onSubmit={handleEmailLogin} className="space-y-4">
           <div>
-            <label className="text-xs font-medium text-neutral-300">Correo Corporativo</label>
+            <label className="text-xs font-medium text-neutral-300">Correo Autorizado</label>
             <input
               type="email"
               required
@@ -189,10 +286,13 @@ function LoginForm() {
           </div>
 
           <div>
-            <label className="text-xs font-medium text-neutral-300">Contraseña</label>
+            <label className="text-xs font-medium text-neutral-300">
+              {authMode === 'activate' ? 'Crea tu Contraseña (mín. 6 caracteres)' : 'Contraseña'}
+            </label>
             <input
               type="password"
               required
+              minLength={6}
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               placeholder="••••••••"
@@ -205,8 +305,17 @@ function LoginForm() {
             disabled={loading}
             className="flex w-full items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white shadow-md hover:bg-blue-500 disabled:opacity-50 transition"
           >
-            <LogIn className="h-4 w-4" />
-            {loading ? 'Ingresando...' : 'Iniciar Sesión'}
+            {authMode === 'activate' ? (
+              <>
+                <UserCheck className="h-4 w-4" />
+                {loading ? 'Activando cuenta...' : 'Crear Contraseña e Ingresar'}
+              </>
+            ) : (
+              <>
+                <LogIn className="h-4 w-4" />
+                {loading ? 'Ingresando...' : 'Iniciar Sesión'}
+              </>
+            )}
           </button>
         </form>
 

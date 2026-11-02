@@ -86,24 +86,31 @@ export default async function DashboardLayout({
     .eq('id', tenantId)
     .single<Tenant>();
 
-  // Consulta membresías: obtener los tenant_ids del usuario
-  const { data: membershipRows } = await supabase
-    .from('tenant_members')
-    .select('tenant_id')
-    .eq('user_id', user.id);
+  let userTenants: Tenant[] = [];
 
-  // Fallback: si tenant_members está vacío, al menos incluir el tenant activo del perfil
-  const rawTenantIds = membershipRows?.map((m) => m.tenant_id).filter(Boolean) ?? [];
-  const tenantIds = rawTenantIds.length > 0
-    ? rawTenantIds
-    : [tenantId]; // garantiza que el tenant activo siempre aparece
+  if (profile?.is_super_admin) {
+    const { data: allTenantsData } = await supabase
+      .from('tenants')
+      .select('id, name, logo_url, primary_color')
+      .order('created_at', { ascending: false });
+    userTenants = (allTenantsData ?? []) as Tenant[];
+  } else {
+    // Consulta membresías: obtener los tenant_ids del usuario
+    const { data: membershipRows } = await supabase
+      .from('tenant_members')
+      .select('tenant_id')
+      .eq('user_id', user.id);
 
-  const { data: userTenantsData } = await supabase
-    .from('tenants')
-    .select('id, name, logo_url, primary_color')
-    .in('id', tenantIds);
+    const rawTenantIds = membershipRows?.map((m) => m.tenant_id).filter(Boolean) ?? [];
+    const tenantIds = rawTenantIds.length > 0 ? rawTenantIds : [tenantId];
 
-  const userTenants: Tenant[] = (userTenantsData ?? []) as Tenant[];
+    const { data: userTenantsData } = await supabase
+      .from('tenants')
+      .select('id, name, logo_url, primary_color')
+      .in('id', tenantIds);
+
+    userTenants = (userTenantsData ?? []) as Tenant[];
+  }
 
   const brandColor = tenant?.primary_color ?? '#2563eb';
 

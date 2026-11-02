@@ -144,6 +144,47 @@ $$;
 GRANT EXECUTE ON FUNCTION public.get_tenant_branding_by_domain(TEXT) TO anon, authenticated;
 
 -- ============================================================================
+-- 5. RPC ATÓMICO PARA REABASTECIMIENTO DE INVENTARIO (KÁRDEX ENTRY)
+-- ============================================================================
+CREATE OR REPLACE FUNCTION public.add_inventory_stock(
+  p_item_id UUID,
+  p_quantity NUMERIC
+)
+RETURNS NUMERIC
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_tenant_id UUID;
+  v_new_stock NUMERIC;
+BEGIN
+  IF p_quantity <= 0 THEN
+    RAISE EXCEPTION 'La cantidad a ingresar debe ser mayor a cero.';
+  END IF;
+
+  SELECT tenant_id INTO v_tenant_id FROM public.profiles WHERE id = auth.uid();
+  IF v_tenant_id IS NULL THEN
+    RAISE EXCEPTION 'Usuario no asociado a ninguna empresa.';
+  END IF;
+
+  UPDATE public.items
+  SET current_stock = current_stock + p_quantity
+  WHERE id = p_item_id AND tenant_id = v_tenant_id
+  RETURNING current_stock INTO v_new_stock;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'El ítem no pertenece a tu empresa o no existe.';
+  END IF;
+
+  INSERT INTO public.inventory_movements (tenant_id, item_id, type, quantity)
+  VALUES (v_tenant_id, p_item_id, 'entry', p_quantity);
+
+  RETURN v_new_stock;
+END;
+$$;
+
+-- ============================================================================
 -- 4. CONFIGURACIÓN INICIAL DE TU CUENTA (REEMPLAZA CON TU CORREO)
 -- ============================================================================
 -- Descomenta y ejecuta con tu correo para darte permisos de Super Admin:

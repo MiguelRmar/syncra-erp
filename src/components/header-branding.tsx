@@ -14,6 +14,7 @@ import {
   Menu,
   X,
   Check,
+  ShieldCheck,
 } from 'lucide-react';
 
 interface Tenant {
@@ -84,6 +85,9 @@ export default function HeaderBranding({
     { href: '/inventory', label: 'Inventario', icon: Boxes },
     { href: '/team', label: 'Equipo', icon: Users },
     { href: '/settings/company', label: 'Ajustes', icon: Settings },
+    ...(profile?.is_super_admin
+      ? [{ href: '/admin/companies', label: 'Empresas (Admin)', icon: ShieldCheck }]
+      : []),
   ];
 
   const brandColor = tenant?.primary_color || '#2563eb';
@@ -120,7 +124,7 @@ export default function HeaderBranding({
                 {tenant?.name || 'Syncra ERP'}
               </span>
               <span className="text-[10px] text-neutral-400 capitalize leading-none mt-0.5">
-                {profile?.role || 'Miembro'}
+                {profile?.is_super_admin ? 'Super Admin' : profile?.role || 'Miembro'}
               </span>
             </div>
 

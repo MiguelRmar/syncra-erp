@@ -25,12 +25,19 @@ export async function proxy(request: NextRequest) {
 
   const { data: { user } } = await supabase.auth.getUser();
 
+  if (request.nextUrl.pathname === '/') {
+    const url = request.nextUrl.clone();
+    url.pathname = user ? '/inventory' : '/login';
+    return NextResponse.redirect(url);
+  }
+
   const isAuthRoute = request.nextUrl.pathname.startsWith('/login');
   const isProtectedRoute =
     request.nextUrl.pathname.startsWith('/inventory') ||
     request.nextUrl.pathname.startsWith('/production') ||
     request.nextUrl.pathname.startsWith('/team') ||
     request.nextUrl.pathname.startsWith('/settings') ||
+    request.nextUrl.pathname.startsWith('/admin') ||
     request.nextUrl.pathname.startsWith('/onboarding');
 
   if (!user && isProtectedRoute) {

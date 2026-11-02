@@ -10,7 +10,13 @@ export async function GET(request: Request) {
     const supabase = await createClient();
     const { data: sessionData, error } = await supabase.auth.exchangeCodeForSession(code);
 
-    if (!error && sessionData.user) {
+    if (error) {
+      return NextResponse.redirect(
+        `${origin}/login?error=oauth_error&reason=${encodeURIComponent(error.message)}`
+      );
+    }
+
+    if (sessionData.user) {
       const user = sessionData.user;
       const userEmail = (user.email ?? '').toLowerCase();
 
