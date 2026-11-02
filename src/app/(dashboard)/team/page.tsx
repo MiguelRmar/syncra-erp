@@ -15,6 +15,7 @@ interface Invitation {
 interface AuthorizedOwner {
   email: string;
   company_notes: string | null;
+  custom_domain?: string | null;
   used_at: string | null;
   created_at: string;
 }
@@ -24,6 +25,7 @@ export default function TeamPage() {
   const [role, setRole] = useState('operator');
   const [invitations, setInvitations] = useState<Invitation[]>([]);
   const [tenantName, setTenantName] = useState('Syncra ERP');
+  const [tenantCustomDomain, setTenantCustomDomain] = useState<string | null>(null);
   const [isSuperAdmin, setIsSuperAdmin] = useState(false);
   const [authorizedOwners, setAuthorizedOwners] = useState<AuthorizedOwner[]>([]);
   const [newOwnerEmail, setNewOwnerEmail] = useState('');
@@ -67,20 +69,25 @@ export default function TeamPage() {
           .order('created_at', { ascending: false }),
         supabase
           .from('tenants')
-          .select('name')
+          .select('name, custom_domain')
           .eq('id', profile.tenant_id)
           .single(),
       ]);
 
       if (invData) setInvitations(invData);
       if (tenantData?.name) setTenantName(tenantData.name);
+      if (tenantData?.custom_domain) setTenantCustomDomain(tenantData.custom_domain);
     }
   };
 
   const getRoleLabel = (r: string) => (r === 'admin' ? 'Administrador' : 'Operario');
 
   const buildInviteMessage = (targetEmail: string, targetRole: string) => {
-    const appUrl = typeof window !== 'undefined' ? `${window.location.origin}/login` : 'https://syncra-erp.vercel.app/login';
+    const appUrl = tenantCustomDomain
+      ? `https://${tenantCustomDomain}/login`
+      : typeof window !== 'undefined'
+      ? `${window.location.origin}/login`
+      : 'https://syncra-erp.vercel.app/login';
     return `Hola, has sido autorizado para unirte a ${tenantName} en Syncra ERP con el rol de ${getRoleLabel(targetRole)}.\n\nIngresa aquí usando tu correo (${targetEmail}):\n${appUrl}`;
   };
 
@@ -104,10 +111,14 @@ export default function TeamPage() {
     }
   };
 
-  const buildOwnerLicenseMessage = (targetEmail: string, notes: string | null) => {
-    const appUrl = typeof window !== 'undefined' ? `${window.location.origin}/login` : 'https://syncra-erp.vercel.app/login';
-    const companyRef = notes ? ` (${notes})` : '';
-    return `Hola, tu licencia comercial en Syncra ERP${companyRef} ha sido activada.\n\nIngresa aquí con tu correo (${targetEmail}) para registrar y configurar tu empresa:\n${appUrl}`;
+  const buildOwnerLicenseMessage = (owner: AuthorizedOwner) => {
+    const appUrl = owner.custom_domain
+      ? `https://${owner.custom_domain}/login`
+      : typeof window !== 'undefined'
+      ? `${window.location.origin}/login`
+      : 'https://syncra-erp.vercel.app/login';
+    const companyRef = owner.company_notes ? ` (${owner.company_notes})` : '';
+    return `Hola, tu licencia comercial en Syncra ERP${companyRef} ha sido activada.\n\nIngresa a tu portal exclusivo aquí con tu correo (${owner.email}):\n${appUrl}`;
   };
 
   const handleAuthorizeNewOwner = async (e: React.FormEvent) => {
@@ -118,17 +129,19 @@ export default function TeamPage() {
 
     try {
       const cleanEmail = newOwnerEmail.trim().toLowerCase();
-      const { data, error } = await supabase
-        .from('authorized_owners')
-        .upsert(
-          [{ email: cleanEmail, company_notes: newOwnerNotes.trim() || null, used_at: null }],
-          { onConflict: 'email' }
-        )
-        .select()
-        .single();
+      const response = await fetch('/api/admin/authorize-owner', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: cleanEmail,
+          company_notes: newOwnerNotes.trim(),
+        }),
+      });
 
-      if (error) throw error;
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || 'Error al autorizar cliente');
 
+      const data: AuthorizedOwner = result.owner;
       setAuthorizedOwners((prev) => [
         data,
         ...prev.filter((o) => o.email !== cleanEmail),
@@ -137,7 +150,9 @@ export default function TeamPage() {
       setNewOwnerNotes('');
       setFeedback({
         type: 'success',
-        text: `Licencia para nueva empresa habilitada para ${cleanEmail}. Cuando inicie sesión será dirigido a /onboarding para crear su propia empresa.`,
+        text: data.custom_domain
+          ? `¡Licencia y URL creadas! Se aprovisionó https://${data.custom_domain} para ${cleanEmail}.`
+          : `Licencia para nueva empresa habilitada para ${cleanEmail}.`,
       });
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Error al autorizar cliente';
@@ -426,9 +441,7 @@ export default function TeamPage() {
                           <button
                             type="button"
                             onClick={async () => {
-                              await navigator.clipboard.writeText(
-                                buildOwnerLicenseMessage(owner.email, owner.company_notes)
-                              );
+                              await navigator.clipboard.writeText(buildOwnerLicenseMessage(owner));
                               setCopiedId(owner.email);
                               setTimeout(() => setCopiedId(null), 2000);
                             }}
@@ -450,10 +463,10 @@ export default function TeamPage() {
                           <button
                             type="button"
                             onClick={() => {
-                              const subject = encodeURIComponent('Bienvenido a Syncra ERP - Configura tu Empresa');
-                              const body = encodeURIComponent(
-                                buildOwnerLicenseMessage(owner.email, owner.company_notes)
+                              const subject = encodeURIComponent(
+                                `Bienvenido a Syncra ERP - Portal ${owner.company_notes || ''}`.trim()
                               );
+                              const body = encodeURIComponent(buildOwnerLicenseMessage(owner));
                               window.open(`mailto:${owner.email}?subject=${subject}&body=${body}`, '_blank');
                             }}
                             className="inline-flex items-center gap-1.5 rounded-md border border-neutral-700 bg-neutral-800/80 px-2.5 py-1 text-[11px] font-medium text-neutral-200 hover:bg-neutral-700 transition"
